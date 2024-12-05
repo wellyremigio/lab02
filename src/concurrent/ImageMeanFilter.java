@@ -29,7 +29,7 @@ public class ImageMeanFilter {
      * @param kernelSize Size of mean kernel
      * @throws IOException If there is an error reading/writing
      */
-    public static void applyMeanFilter(String inputPath, String outputPath, int kernelSize) throws IOException {
+    public static void applyMeanFilter(String inputPath, String outputPath, int kernelSize, int threadNumber) throws IOException {
         // Load image
         BufferedImage originalImage = ImageIO.read(new File(inputPath));
         
@@ -39,30 +39,69 @@ public class ImageMeanFilter {
             originalImage.getHeight(), 
             BufferedImage.TYPE_INT_RGB
         );
-        
-        // Image processing
-        int width = originalImage.getWidth();
-        int height = originalImage.getHeight();
-        // Process each pixel
-        for (int y = 0; y < height; y++) {
-            for (int x = 0; x < width; x++) {
-                // Calculate neighborhood average
-                int[] avgColor = calculateNeighborhoodAverage(originalImage, x, y, kernelSize);
-                
-                // Set filtered pixel
-                filteredImage.setRGB(x, y, 
-                    (avgColor[0] << 16) | 
-                    (avgColor[1] << 8)  | 
-                    avgColor[2]
-                );
+
+        int rowByThread = (originalImage.getHeight() / threadNumber);
+        Thread[] threads = new Thread[threadNumber];
+
+        for(int i=0; i < threadNumber; i++){
+            int firstRow = i * rowByThread;
+            int lastRow;
+            if(i == threadNumber-1){
+                lastRow = originalImage.getHeight();
+            }else{
+                lastRow = rowByThread * (i+1);
+            }
+            Task task = new Task(originalImage, filteredImage, kernelSize, firstRow, lastRow);
+            Thread thread = new Thread(task);
+            threads[i] = thread;
+            thread.start();
+        }
+
+        for(Thread thread: threads){
+            try {
+                thread.join();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
             }
         }
-        
+      
         // Save filtered image
         ImageIO.write(filteredImage, "jpg", new File(outputPath));
+        
     }
-    
-    /**
+
+    public static class Task implements Runnable{
+        private final BufferedImage originalImage;
+        private final BufferedImage filteredImage;
+        private final int kernelSize;
+        private final int firstRow;
+        private final int lastRow;
+
+        public Task(BufferedImage originalImage, BufferedImage filteredImage, int kernelSize, int firstRow, int lastRow){
+            this.originalImage = originalImage;
+            this.filteredImage = filteredImage;
+            this.kernelSize = kernelSize;
+            this.firstRow = firstRow;
+            this.lastRow = lastRow;
+        }
+
+        @Override
+        public void run(){
+            int width = this.originalImage.getWidth();
+            for (int y = firstRow; y < lastRow; y++) {
+                for (int x = 0; x < width; x++) {
+                    int[] avgColor = calculateNeighborhoodAverage(originalImage, x, y, kernelSize);
+                    filteredImage.setRGB(x, y, 
+                        (avgColor[0] << 16) | 
+                        (avgColor[1] << 8)  | 
+                        avgColor[2]
+                    );
+                }
+            }
+
+        }
+
+         /**
      * Calculates average colors in a pixel's neighborhood
      * 
      * @param image      Source image
@@ -71,47 +110,51 @@ public class ImageMeanFilter {
      * @param kernelSize Kernel size
      * @return Array with R, G, B averages
      */
-    private static int[] calculateNeighborhoodAverage(BufferedImage image, int centerX, int centerY, int kernelSize) {
-        int width = image.getWidth();
-        int height = image.getHeight();
-        int pad = kernelSize / 2;
-        
-        // Arrays for color sums
-        long redSum = 0, greenSum = 0, blueSum = 0;
-        int pixelCount = 0;
-        
-        // Process neighborhood
-        for (int dy = -pad; dy <= pad; dy++) {
-            for (int dx = -pad; dx <= pad; dx++) {
-                int x = centerX + dx;
-                int y = centerY + dy;
-                
-                // Check image bounds
-                if (x >= 0 && x < width && y >= 0 && y < height) {
-                    // Get pixel color
-                    int rgb = image.getRGB(x, y);
+        private static int[] calculateNeighborhoodAverage(BufferedImage image, int centerX, int centerY, int kernelSize) {
+            int width = image.getWidth();
+            int height = image.getHeight();
+            int pad = kernelSize / 2;
+            
+            // Arrays for color sums
+            long redSum = 0, greenSum = 0, blueSum = 0;
+            int pixelCount = 0;
+            
+            // Process neighborhood
+            for (int dy = -pad; dy <= pad; dy++) {
+                for (int dx = -pad; dx <= pad; dx++) {
+                    int x = centerX + dx;
+                    int y = centerY + dy;
                     
-                    // Extract color components
-                    int red = (rgb >> 16) & 0xFF;
-                    int green = (rgb >> 8) & 0xFF;
-                    int blue = rgb & 0xFF;
-                    
-                    // Sum colors
-                    redSum += red;
-                    greenSum += green;
-                    blueSum += blue;
-                    pixelCount++;
+                    // Check image bounds
+                    if (x >= 0 && x < width && y >= 0 && y < height) {
+                        // Get pixel color
+                        int rgb = image.getRGB(x, y);
+                        
+                        // Extract color components
+                        int red = (rgb >> 16) & 0xFF;
+                        int green = (rgb >> 8) & 0xFF;
+                        int blue = rgb & 0xFF;
+                        
+                        // Sum colors
+                        redSum += red;
+                        greenSum += green;
+                        blueSum += blue;
+                        pixelCount++;
+                    }
                 }
             }
-        }
         
         // Calculate average
-        return new int[] {
-            (int)(redSum / pixelCount),
-            (int)(greenSum / pixelCount),
-            (int)(blueSum / pixelCount)
-        };
+            return new int[] {
+                (int)(redSum / pixelCount),
+                (int)(greenSum / pixelCount),
+                (int)(blueSum / pixelCount)
+            };
+        
+        }
+
     }
+    
     
     /**
      * Main method for demonstration
@@ -129,14 +172,16 @@ public class ImageMeanFilter {
      * using a 7x7 mean filter kernel
      */
     public static void main(String[] args) {
-        if (args.length < 1) {
+        if (args.length < 2) {
             System.err.println("Usage: java ImageMeanFilter <input_file>");
             System.exit(1);
         }
 
         String inputFile = args[0];
+        int threadNumber = Integer.parseInt(args[1]);
+
         try {
-            applyMeanFilter(inputFile, "filtered_output.jpg", 7);
+            applyMeanFilter(inputFile, "filtered_output.jpg", 7, threadNumber);
         } catch (IOException e) {
             System.err.println("Error processing image: " + e.getMessage());
         }
